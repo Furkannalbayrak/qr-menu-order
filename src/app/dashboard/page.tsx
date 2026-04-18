@@ -28,40 +28,49 @@ export default function DashboardPage() {
     }
     fetchOrders()
 
+    // Polling: 5 saniyede bir güncelleme
+    const pollInterval = setInterval(fetchOrders, 5000)
+
+    // Realtime subscription (anlık güncelleme için ek destek)
     const channel = supabase
       .channel('kitchen-orders')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'Order' },
-        (payload) => {
-          // Yeni siparişi ekle. Normalde detailed itemleri çekmek için tekrar bi fetch atabiliriz
-          // Ama basitlik için sayfayı refreshletebilir veya placeholder koyabiliriz
-          // Mutfak anlık göreceği için reload atmak en güvenlisi (ilişkili productları çekmek için)
-          fetchOrders()
-        }
+        () => { fetchOrders() }
       )
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'Order' },
-        (payload) => {
-          setOrders(prev => prev.map(o => o.id === payload.new.id ? { ...o, status: payload.new.status } : o))
+        (payload: any) => {
+          if (payload.new.status === 'paid' || payload.new.status === 'canceled') {
+            setOrders(prev => prev.filter(o => o.id !== payload.new.id))
+          } else {
+            setOrders(prev => prev.map(o => o.id === payload.new.id ? { ...o, status: payload.new.status } : o))
+          }
         }
       )
       .subscribe()
 
     return () => {
+      clearInterval(pollInterval)
       supabase.removeChannel(channel)
     }
   }, [])
 
-  const handleStatus = async (id: string, st: string) => {
-    await updateOrderStatus(id, st)
+  const handleStatus = async (id: string, newStatus: string) => {
+    // Optimistic update: Butona basıldığı anda local state'i hemen güncelle
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: newStatus } : o))
+    // Sonra sunucuya gönder
+    await updateOrderStatus(id, newStatus)
   }
 
-  // Gruplama
-  const pending = orders.filter(o => o.status === 'pending')
-  const preparing = orders.filter(o => o.status === 'preparing')
-  const completed = orders.filter(o => o.status === 'completed') // Sadece ekranda gözüksün diye
+  // Gruplama (Eskiden Yeniye / İlk Giren İlk Çıkar)
+  const sortedOrders = [...orders].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+  
+  const pending = sortedOrders.filter(o => o.status === 'pending')
+  const preparing = sortedOrders.filter(o => o.status === 'preparing')
+  const completed = sortedOrders.filter(o => o.status === 'completed') // Sadece ekranda gözüksün diye
 
   const Column = ({ title, items, nextLabel, nextStatus, colorClass }: any) => (
     <div className="flex-1 bg-secondary/30 p-4 rounded-xl min-w-[300px]">
