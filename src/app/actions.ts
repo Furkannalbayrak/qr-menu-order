@@ -40,13 +40,22 @@ export async function updateOrderStatus(orderId: string, status: string) {
 
 export async function markTableAsPaid(tableId: string) {
   try {
-    await prisma.order.updateMany({
+    // Önce aktif siparişleri bul
+    const activeOrders = await prisma.order.findMany({
       where: {
         tableId,
         status: { notIn: ['paid', 'canceled'] }
-      },
-      data: { status: 'paid' }
+      }
     });
+    
+    // Her birini tek tek güncelle (Supabase Realtime event tetiklemesi için)
+    for (const order of activeOrders) {
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { status: 'paid' }
+      });
+    }
+    
     return { success: true };
   } catch (error) {
     console.error("Mark paid error:", error);
