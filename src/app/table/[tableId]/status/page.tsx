@@ -8,14 +8,14 @@ import { Badge } from '@/components/ui/badge'
 const statusMap: Record<string, { label: string, color: string }> = {
   pending: { label: 'Beklemede', color: 'bg-yellow-600' },
   preparing: { label: 'Hazırlanıyor', color: 'bg-blue-600' },
-  completed: { label: 'Masaya İletildi', color: 'bg-green-600' },
+  completed: { label: 'Teslim Alabilirsiniz', color: 'bg-green-600' },
 }
 
 export default function StatusPage({ params }: { params: Promise<{ tableId: string }> }) {
   const resolvedParams = use(params);
   const [orders, setOrders] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  
+
   useEffect(() => {
     // 1. Initial fetch (aktif siparişler)
     const fetchOrders = async () => {
@@ -33,20 +33,23 @@ export default function StatusPage({ params }: { params: Promise<{ tableId: stri
     }
     fetchOrders()
 
-    // 2. Realtime Subscription
+    // Polling: 5 saniyede bir güncelleme
+    const pollInterval = setInterval(fetchOrders, 5000)
+
+    // Realtime Subscription (anlık güncelleme için ek destek)
     const channel = supabase
-      .channel('table-orders')
+      .channel(`table-orders-${resolvedParams.tableId}`)
       .on(
         'postgres_changes',
         {
           event: 'UPDATE',
           schema: 'public',
           table: 'Order',
-          filter: `tableId=eq.${resolvedParams.tableId}`,
         },
-        (payload) => {
+        (payload: any) => {
+          if (payload.new.tableId !== resolvedParams.tableId) return
+          
           setOrders(prev => {
-            // Eğer status paid veya canceled olduysa listeden çıkarabiliriz
             if (payload.new.status === 'paid' || payload.new.status === 'canceled') {
               return prev.filter(o => o.id !== payload.new.id)
             }
@@ -60,15 +63,16 @@ export default function StatusPage({ params }: { params: Promise<{ tableId: stri
           event: 'INSERT',
           schema: 'public',
           table: 'Order',
-          filter: `tableId=eq.${resolvedParams.tableId}`,
         },
-        (payload) => {
-          setOrders(prev => [payload.new, ...prev])
+        (payload: any) => {
+          if (payload.new.tableId !== resolvedParams.tableId) return
+          fetchOrders()
         }
       )
       .subscribe()
 
     return () => {
+      clearInterval(pollInterval)
       supabase.removeChannel(channel)
     }
   }, [resolvedParams.tableId])
@@ -100,13 +104,33 @@ export default function StatusPage({ params }: { params: Promise<{ tableId: stri
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="flex justify-between items-end">
-                  <div>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Saat: {new Date(order.createdAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
-                    </p>
+                <div className="space-y-3 mt-2">
+                  {/* Sipariş İçeriği (Ürünler) */}
+                  <div className="bg-secondary/10 rounded-xl p-3 space-y-2">
+                    {order.items?.map((item: any) => (
+                      <div key={item.id} className="flex justify-between items-start text-sm">
+                        <div className="flex items-start gap-2">
+                          <span className="font-bold text-[#3e2723] min-w-[24px]">{item.quantity}x</span>
+                          <span className="text-foreground">{item.product?.name || 'Ürün bulunamadı'}</span>
+                        </div>
+                        <span className="text-muted-foreground whitespace-nowrap ml-2">
+                          {(item.product?.price || 0) * item.quantity} ₺
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                  <p className="font-extrabold text-primary text-xl">{order.totalAmount} ₺</p>
+
+                  <div className="flex justify-between items-end pt-2 border-t border-border/40">
+                    <div>
+                      <p className="text-xs text-muted-foreground">
+                        Saat: {new Date(order.createdAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-muted-foreground mb-0.5">Toplam Tutar</p>
+                      <p className="font-extrabold text-primary text-xl">{order.totalAmount} ₺</p>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
